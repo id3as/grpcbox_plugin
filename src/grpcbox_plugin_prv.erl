@@ -95,13 +95,16 @@ compile_pb(Filename, OutDir, BeamOutDir, GpbOpts) ->
     GeneratedPB = filename:join(OutDir, ModuleName ++ ".erl"),
     CompiledPB = filename:join(BeamOutDir, ModuleName ++ ".beam"),
     ok = filelib:ensure_dir(GeneratedPB),
+
     case needs_update(Filename, GeneratedPB) of
         true ->
             rebar_log:log(info, "Writing ~s", [GeneratedPB]),
             case gpb_compile:file(Filename, [{rename,{msg_name,snake_case}},
                                              {rename,{msg_fqname,base_name}},
                                              use_packages, maps,
-                                             strings_as_binaries, {i, "."},
+                                             strings_as_binaries,
+                                             {i, "."},
+                                             {i, filename:dirname(Filename)},
                                              {report_errors, false},
                                              {o, OutDir} | GpbOpts]) of
                 ok ->
