@@ -73,8 +73,7 @@ handle_app(AppInfo, Options, State) ->
                      Ds ->
                          Ds
                  end,
-    ProtoFiles = lists:append([filelib:wildcard(filename:join([BaseDir, D, "*.proto"])) || D <- ProtosDirs]),
-
+    ProtoFiles = lists:append([filelib:wildcard(filename:join([BaseDir, D, "**/*.proto"])) || D <- ProtosDirs]),
     Type = case proplists:get_value(type, Options, undefined) of
                undefined ->
                    proplists:get_value(type, GrpcOpts, all);
@@ -98,7 +97,7 @@ compile_pb(Filename, OutDir, BeamOutDir, GpbOpts) ->
 
     case needs_update(Filename, GeneratedPB) of
         true ->
-            rebar_log:log(info, "Writing ~s", [GeneratedPB]),
+            %%rebar_log:log(info, "Writing ~s", [GeneratedPB]),
             case gpb_compile:file(Filename, [{rename,{msg_name,snake_case}},
                                              {rename,{msg_fqname,base_name}},
                                              use_packages, maps,
@@ -131,6 +130,7 @@ compile_pb(Filename, OutDir, BeamOutDir, GpbOpts) ->
         false ->
             ok
     end,
+     code:purge(list_to_atom(ModuleName)),
     {module, Module} = code:load_abs(filename:join(BeamOutDir, ModuleName)),
     {Module, CompiledPB}.
 
@@ -140,7 +140,7 @@ gen_services(Templates, ProtoModule, ProtoBeam, OutDir, GrpcConfig, State) ->
     WithTemplates = [{S, TemplateSuffix, TemplateName}
                      || S <- ServiceDefs, {TemplateSuffix, TemplateName} <- Templates],
     Services = lists:filter(fun(S) -> filter_outdated(S, OutDir, ProtoBeam) end, WithTemplates),
-    rebar_log:log(debug, "services: ~p", [Services]),
+    %%rebar_log:log(debug, "services: ~p", [Services]),
     [rebar_templater:new(TemplateName, maps:to_list(Service), true, State)
      || {Service, _, TemplateName} <- Services].
 
