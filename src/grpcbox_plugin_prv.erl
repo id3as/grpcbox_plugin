@@ -41,11 +41,6 @@ do(State) ->
     {ok, State}.
 
 -spec format_error(any()) ->  iolist().
-format_error({compile_errors, Errors}) ->
-    [[io_lib:format("Error building ~s~n", [File]) |
-      [io_lib:format("        ~p: ~s", [Line, M:format_error(E)])
-       || {Line, M, E} <- Es]]
-     || {File, Es} <- Errors];
 format_error({gpb, File, Error}) ->
     io_lib:format("Error compiling proto file ~s ~s", [filename:basename(File),
                                                        gpb_compile:format_error(Error)]);
@@ -95,17 +90,17 @@ compile_pb(Filename, OutDir, BeamOutDir, GpbOpts) ->
     CompiledPB = filename:join(BeamOutDir, ModuleName ++ ".beam"),
     ok = filelib:ensure_dir(GeneratedPB),
 
+    PbOpts = [{rename,{msg_name,snake_case}},
+              {rename,{msg_fqname,base_name}},
+              use_packages, maps,
+              strings_as_binaries,
+              {i, "."},
+              {i, filename:dirname(Filename)},
+              {report_errors, false} | GpbOpts],
     case needs_update(Filename, GeneratedPB) of
         true ->
             %%rebar_log:log(info, "Writing ~s", [GeneratedPB]),
-            case gpb_compile:file(Filename, [{rename,{msg_name,snake_case}},
-                                             {rename,{msg_fqname,base_name}},
-                                             use_packages, maps,
-                                             strings_as_binaries,
-                                             {i, "."},
-                                             {i, filename:dirname(Filename)},
-                                             {report_errors, false},
-                                             {o, OutDir} | GpbOpts]) of
+            case gpb_compile:file(Filename, [{o, OutDir} | PbOpts]) of
                 ok ->
                     ok;
                 {error, Error} ->
@@ -114,18 +109,26 @@ compile_pb(Filename, OutDir, BeamOutDir, GpbOpts) ->
         false ->
             ok
     end,
+    %% The beam written here is never shipped: it is only loaded into this
+    %% generator VM (here and by grpc_purs_plugin) to read the proto metadata
+    %% (get_service_def, find_msg_def, get_*_containment, ...). Compiling the
+    %% full GeneratedPB for that took ~64 s of the ~88 s gen action for
+    %% media_pb (330k lines), and buck2 compiles the shipped module again
+    %% anyway. Ask gpb for the same module with encoders and decoders left out:
+    %% the introspection functions are generated from the same defs, so their
+    %% results are identical (checked over 25 norsk proto revisions),
+    %% and the module compiles in ~2.5 s.
     case needs_update(GeneratedPB, CompiledPB) of
         true ->
-            GpbIncludeDir = filename:join(code:lib_dir(gpb), "include"),
-            case compile:file(GeneratedPB, [{outdir, BeamOutDir}, {i, GpbIncludeDir}, return_errors]) of
-                {ok, _} ->
-                    ok;
-                {ok, _, Warnings} ->
-                    log_warnings(Warnings),
-                    ok;
-                {error, Errors, Warnings} ->
-                    log_warnings(Warnings),
-                    throw(?PRV_ERROR({compile_errors, Errors}))
+            case gpb_compile:file(Filename, [binary, {gen_encoders, false},
+                                             {gen_decoders, false},
+                                             {report_warnings, false} | PbOpts]) of
+                {ok, _IntrospectModule, IntrospectBeam} ->
+                    ok = file:write_file(CompiledPB, IntrospectBeam);
+                {ok, _IntrospectModule, IntrospectBeam, _Warnings} ->
+                    ok = file:write_file(CompiledPB, IntrospectBeam);
+                {error, IntrospectError} ->
+                    erlang:error(?PRV_ERROR({gpb, Filename, IntrospectError}))
             end;
         false ->
             ok
@@ -207,8 +210,3 @@ list_snake_case(NameString) ->
 needs_update(Source, Artifact) ->
     filelib:last_modified(Source) >= filelib:last_modified(Artifact).
 
-log_warnings(Warnings) ->
-    [begin
-         rebar_api:warn("Warning building ~s~n", [File]),
-         [rebar_api:warn("        ~p: ~s", [Line, M:format_error(E)]) || {Line, M, E} <- Es]
-     end || {File, Es} <- Warnings].
